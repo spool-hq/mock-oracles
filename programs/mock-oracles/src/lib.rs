@@ -1,114 +1,168 @@
 use anchor_lang::prelude::*;
+use bytemuck::Pod;
+use pyth_sdk_solana::state::{
+    AccountType, PriceAccount, PriceStatus, PriceType, ProductAccount, MAGIC, PROD_ACCT_SIZE,
+    PROD_ATTR_SIZE, VERSION_2,
+};
+use std::cell::RefMut;
+use std::mem::size_of;
+use switchboard_v2::{AggregatorAccountData, SwitchboardDecimal};
 
-declare_id!("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
+const QUOTE_CURRENCY: [u8; 32] = *b"USD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
 #[program]
 pub mod mock_oracles {
     use super::*;
-    use pyth_client::{cast, Price, PriceStatus, PriceType};
-    use quick_protobuf::serialize_into_slice;
-    use std::convert::TryInto;
-    use switchboard_program::mod_AggregatorState::Configs;
-    use switchboard_program::{
-        get_aggregator, get_aggregator_result, AggregatorState, FastRoundResultAccountData,
-        RoundResult, SwitchboardAccountType,
-    };
-    /// Write data to an account
-    pub fn write(ctx: Context<Write>, offset: u64, data: Vec<u8>) -> ProgramResult {
-        let offset = offset as usize;
-        let account_data = &mut ctx.accounts.target.try_borrow_mut_data()?;
-        account_data[offset..offset + data.len()].copy_from_slice(&data[..]);
-        Ok(())
-    }
 
-    pub fn write_pyth_price(ctx: Context<Write>, price: i64, expo: u8, slot: i64) -> ProgramResult {
-        let account_data = &mut ctx.accounts.target.try_borrow_mut_data()?;
-        let exist_price_data = cast::<Price>(&account_data);
+    pub fn init_pyth(ctx: Context<InitPyth>) -> Result<()> {
+        msg!("Mock Pyth: Init");
 
-        let mut price_data: Price = unsafe { std::mem::zeroed() };
-        price_data.ptype = PriceType::Price;
-        price_data.valid_slot = slot.try_into().unwrap_or(exist_price_data.valid_slot);
-        price_data.agg.price = if price < 0 {
-            exist_price_data.agg.price
-        } else {
-            price
+        let price_account_info = &ctx.accounts.price_account;
+        let product_account_info = &ctx.accounts.product_account;
+
+        // write PriceAccount
+        let mut price_account = load_account_as_mut::<PriceAccount>(price_account_info)?;
+        price_account.magic = MAGIC;
+        price_account.ver = VERSION_2;
+        price_account.atype = AccountType::Price as u32;
+        price_account.size = size_of::<PriceAccount>() as u32;
+        price_account.ptype = PriceType::Price;
+
+        price_account.expo = 0;
+        price_account.last_slot = 0;
+        price_account.valid_slot = 0;
+        price_account.agg.pub_slot = 0;
+        price_account.prev_slot = 0;
+        price_account.prev_price = 0;
+        price_account.prev_conf = 0;
+        price_account.prev_timestamp = 0;
+
+        // write ProductAccount
+        let attr: [u8; 464] = {
+            let mut attr: Vec<u8> = Vec::new();
+            let quote_currency = b"quote_currency";
+            attr.push(quote_currency.len() as u8);
+            attr.extend(quote_currency);
+            attr.push(QUOTE_CURRENCY.len() as u8);
+            attr.extend(QUOTE_CURRENCY);
+
+            let mut buf = [0; PROD_ATTR_SIZE];
+            buf[0..attr.len()].copy_from_slice(&attr);
+
+            buf
         };
-        price_data.expo = expo as i32;
-        price_data.agg.status = PriceStatus::Trading;
 
-        account_data.copy_from_slice(unsafe {
-            &std::mem::transmute::<Price, [u8; std::mem::size_of::<Price>()]>(price_data)
-        });
+        let mut product_account = load_account_as_mut::<ProductAccount>(product_account_info)?;
+        product_account.magic = MAGIC;
+        product_account.ver = VERSION_2;
+        product_account.atype = AccountType::Product as u32;
+        product_account.size = PROD_ACCT_SIZE as u32;
+        product_account.px_acc = *price_account_info.key;
+        product_account.attr = attr;
 
         Ok(())
     }
 
-    #[allow(clippy::field_reassign_with_default)]
-    pub fn write_switchboard_price(
+    pub fn set_pyth_price(
         ctx: Context<Write>,
         price: i64,
-        expo: u8,
-        slot: i64,
-        board_type: u8,
-    ) -> ProgramResult {
-        let account_data = &mut ctx.accounts.target.try_borrow_mut_data()?;
-        let price = price as f64 * (10u32.pow(expo as u32) as f64);
-        if board_type == 0 {
-            let exist_aggregator = get_aggregator(&ctx.accounts.target.to_account_info())?;
-            let result = get_aggregator_result(&exist_aggregator)?;
-            let mut aggregator: AggregatorState = switchboard_program::AggregatorState {
-                configs: Some(Configs {
-                    min_confirmations: Some(0),
-                    ..Configs::default()
-                }),
-                ..Default::default()
-            };
+        // conf: u64,
+        expo: i32,
+        // ema_price: i64,
+        // ema_conf: u64,
+        slot: u64,
+    ) -> Result<()> {
+        msg!("Mock Pyth: Set price");
+        let mut price_account = load_account_as_mut::<PriceAccount>(&ctx.accounts.target)?;
 
-            let last_round_result = RoundResult {
-                round_open_slot: if slot < 0 {
-                    result.round_open_slot
-                } else {
-                    Some(slot as u64)
-                },
-                result: if price < 0.0 {
-                    result.result
-                } else {
-                    Some(price)
-                },
-                num_success: Some(5),
-                ..RoundResult::default()
-            };
-            aggregator.last_round_result = Some(last_round_result);
-            serialize_into_slice(&aggregator, &mut account_data[1..]).unwrap();
-        } else {
-            account_data[0] = SwitchboardAccountType::TYPE_AGGREGATOR_RESULT_PARSE_OPTIMIZED as u8;
-            let result =
-                FastRoundResultAccountData::deserialize(&account_data[1..]).unwrap_or_default();
-            let mut fast_data = FastRoundResultAccountData::default();
-            fast_data.result.result = if price < 0.0 {
-                result.result.result
-            } else {
-                price
-            };
-            fast_data.result.round_open_slot = if slot < 0 {
-                result.result.round_open_slot
-            } else {
-                slot as u64
-            };
-            fast_data.result.num_success = 10;
-            account_data[1..].copy_from_slice(unsafe {
-                &std::mem::transmute::<
-                    FastRoundResultAccountData,
-                    [u8; std::mem::size_of::<FastRoundResultAccountData>()],
-                >(fast_data)
-            });
-        }
+        price_account.agg.price = price;
+        // price_account.agg.conf = conf;
+        price_account.expo = expo;
+
+        // price_account.ema_price = Rational {
+        //     val: ema_price,
+        //     // these fields don't matter
+        //     numer: 1,
+        //     denom: 1,
+        // };
+
+        // price_account.ema_conf = Rational {
+        //     val: ema_conf as i64,
+        //     numer: 1,
+        //     denom: 1,
+        // };
+
+        price_account.valid_slot = slot;
+        price_account.last_slot = slot;
+        price_account.agg.pub_slot = slot;
+        // price_account.last_slot = Clock::get()?.slot;
+        // price_account.agg.pub_slot = Clock::get()?.slot;
+        price_account.agg.status = PriceStatus::Trading;
+
+        Ok(())
+    }
+
+    pub fn init_switchboard(ctx: Context<Write>) -> Result<()> {
+        let mut data = ctx.accounts.target.try_borrow_mut_data()?;
+
+        let discriminator = [217, 230, 65, 101, 201, 162, 27, 125];
+        data[0..8].copy_from_slice(&discriminator);
+
+        Ok(())
+    }
+
+    pub fn set_switchboard_price(
+        ctx: Context<Write>,
+        price: i64,
+        expo: i32,
+        slot: u64,
+    ) -> Result<()> {
+        msg!("Mock Switchboard: Set Switchboard price");
+        let switchboard_feed = &ctx.accounts.target;
+        let data = switchboard_feed.try_borrow_mut_data()?;
+
+        let mut aggregator_account: RefMut<AggregatorAccountData> = RefMut::map(data, |data| {
+            bytemuck::from_bytes_mut(&mut data[8..std::mem::size_of::<AggregatorAccountData>() + 8])
+        });
+
+        aggregator_account.min_oracle_results = 1;
+        aggregator_account.latest_confirmed_round.num_success = 1;
+        aggregator_account.latest_confirmed_round.result = SwitchboardDecimal {
+            mantissa: price as i128,
+            scale: expo as u32,
+        };
+        aggregator_account.latest_confirmed_round.round_open_slot = slot;
+        // aggregator_account.latest_confirmed_round.round_open_slot = Clock::get()?.slot;
+
         Ok(())
     }
 }
 
+pub fn load_account_as_mut<'a, T: Pod>(
+    account: &'a AccountInfo,
+) -> std::result::Result<RefMut<'a, T>, ProgramError> {
+    let data = account.try_borrow_mut_data()?;
+
+    Ok(RefMut::map(data, |data| {
+        bytemuck::from_bytes_mut(&mut data[0..size_of::<T>()])
+    }))
+}
+
 #[derive(Accounts)]
 pub struct Write<'info> {
+    /// CHECK: this program is just for testing
     #[account(mut)]
-    pub target: Signer<'info>,
+    pub target: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitPyth<'info> {
+    /// CHECK: this program is just for testing
+    #[account(mut)]
+    pub price_account: AccountInfo<'info>,
+    /// CHECK: this program is just for testing
+    #[account(mut)]
+    pub product_account: AccountInfo<'info>,
 }

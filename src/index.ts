@@ -1,77 +1,185 @@
-import { Program, Provider } from "@project-serum/anchor";
+import { Program } from "@coral-xyz/anchor";
 import {
   Keypair,
-  PublicKey,
   Transaction,
+  TransactionInstruction,
   SystemProgram,
+  Signer,
 } from "@solana/web3.js";
 import BN from "bn.js";
+import {
+  AugmentedProvider,
+  Provider,
+  SolanaAugmentedProvider,
+} from "@saberhq/solana-contrib";
+
 import { MockOraclesIDL, MockOraclesJSON } from "./idls/mock_oracles";
+import { newProgram } from "@saberhq/anchor-contrib";
+import { MOCK_ORACLES_ADDRESS } from "./constants";
+
+enum MockOracleAccountType {
+  PYTH_PRICE,
+  PYTH_PRODUCT,
+  SWITCHBOARD,
+}
+
 export interface OracleData {
   price?: BN;
   slot?: BN;
   expo?: number;
 }
-export class MockOraclesWrapper {
+
+export class MockOracles {
   public readonly PYTH_PRICE_ACCOUNT_SIZE = 3312;
-  public readonly SWITCHBOARD_OPTIMIZED_SIZE = 105;
+  public readonly PYTH_PRODUCT_ACCOUNT_SIZE = 512;
+  public readonly SWITCHBOARD_ACCOUNT_SIZE = 3851;
 
-  private readonly program: Program<MockOraclesIDL>;
+  constructor(
+    readonly provider: AugmentedProvider,
+    readonly program: Program<MockOraclesIDL>
+  ) {}
 
-  constructor(provider: Provider, programAddress: PublicKey) {
-    this.program = new Program(MockOraclesJSON, programAddress, provider);
+  /**
+   * Creates a new instance of the SDK with the given keypair.
+   */
+  withSigner(signer: Signer): MockOracles {
+    return MockOracles.load({
+      provider: this.provider.withSigner(signer),
+    });
   }
 
-  async createAccount(space: number): Promise<Keypair> {
-    const newAccount = Keypair.generate();
-    const createTx = new Transaction().add(
-      SystemProgram.createAccount({
-        fromPubkey: this.program.provider.wallet.publicKey,
-        newAccountPubkey: newAccount.publicKey,
-        programId: this.program.programId,
-        lamports:
-          await this.program.provider.connection.getMinimumBalanceForRentExemption(
-            space
-          ),
-        space,
-      })
+  /**
+   * Loads the SDK.
+   */
+  static load({
+    provider,
+  }: {
+    // Provider
+    provider: Provider;
+  }): MockOracles {
+    const program = newProgram<Program<MockOraclesIDL>>(
+      MockOraclesJSON,
+      MOCK_ORACLES_ADDRESS,
+      provider
     );
-    await this.program.provider.send(createTx, [newAccount]);
-
-    return newAccount;
+    return new MockOracles(new SolanaAugmentedProvider(provider), program);
   }
 
-  async store(account: Keypair, offset: BN, input: Buffer) {
-    await this.program.rpc.write(offset, input, {
-      accounts: {
-        target: account.publicKey,
-      },
-      signers: [account],
+  async createPyth(): Promise<{
+    priceKeypair: Keypair;
+    productKeypair: Keypair;
+  }> {
+    const [priceKeypair, createPriceIx] = await this._createAccount(
+      MockOracleAccountType.PYTH_PRICE
+    );
+    const [productKeypair, createProductIx] = await this._createAccount(
+      MockOracleAccountType.PYTH_PRODUCT
+    );
+    const initPythTx = await this.program.methods
+      .initPyth()
+      .accounts({
+        priceAccount: priceKeypair.publicKey,
+        productAccount: productKeypair.publicKey,
+      })
+      .preInstructions([createPriceIx, createProductIx])
+      .transaction();
+
+    const pendingTx = await this.provider.send(
+      initPythTx,
+      [priceKeypair, productKeypair],
+      {
+        commitment: "confirmed",
+        skipPreflight: true,
+      }
+    );
+    await pendingTx.wait();
+
+    return { priceKeypair, productKeypair };
+  }
+
+  async createSwitchboard(): Promise<{
+    switchboardKeypair: Keypair;
+  }> {
+    const [switchboardKeypair, createSwitchboardIx] = await this._createAccount(
+      MockOracleAccountType.SWITCHBOARD
+    );
+    const initSwitchboardIx = await this.program.methods
+      .initSwitchboard()
+      .accounts({
+        target: switchboardKeypair.publicKey,
+      })
+      .instruction();
+
+    const createTx = new Transaction().add(
+      createSwitchboardIx,
+      initSwitchboardIx
+    );
+    const pendingTx = await this.provider.send(createTx, [switchboardKeypair], {
+      commitment: "confirmed",
+      skipPreflight: true,
     });
+    await pendingTx.wait();
+
+    return { switchboardKeypair };
   }
 
-  async writePythPrice(
-    account: Keypair,
+  async setPythPrice(
+    keypair: Keypair,
     { price = new BN(-1), slot = new BN(-1), expo = 0 }: OracleData
-  ) {
-    await this.program.rpc.writePythPrice(price, expo, slot, {
-      accounts: {
-        target: account.publicKey,
-      },
-      signers: [account],
-    });
+  ): Promise<string> {
+    const tx = await this.program.methods
+      .setPythPrice(price, expo, slot)
+      .accounts({
+        target: keypair.publicKey,
+      })
+      .signers([keypair])
+      .transaction();
+    const pendingTx = await this.provider.send(tx);
+    return (await pendingTx.wait()).signature;
   }
 
-  async writeSwitchboardPrice(
-    account: Keypair,
-    boardType: number,
+  async setSwitchboardPrice(
+    keypair: Keypair,
     { price = new BN(-1), slot = new BN(-1), expo = 0 }: OracleData
-  ) {
-    await this.program.rpc.writeSwitchboardPrice(price, expo, slot, boardType, {
-      accounts: {
-        target: account.publicKey,
-      },
-      signers: [account],
+  ): Promise<string> {
+    const tx = await this.program.methods
+      .setSwitchboardPrice(price, expo, slot)
+      .accounts({
+        target: keypair.publicKey,
+      })
+      .signers([keypair])
+      .transaction();
+    const pendingTx = await this.provider.send(tx, [], { skipPreflight: true });
+    return (await pendingTx.wait()).signature;
+  }
+
+  private _space(type: MockOracleAccountType): number {
+    switch (type) {
+      case MockOracleAccountType.PYTH_PRICE:
+        return this.PYTH_PRICE_ACCOUNT_SIZE;
+      case MockOracleAccountType.PYTH_PRODUCT:
+        return this.PYTH_PRODUCT_ACCOUNT_SIZE;
+      case MockOracleAccountType.SWITCHBOARD:
+        return this.SWITCHBOARD_ACCOUNT_SIZE;
+    }
+  }
+
+  private async _createAccount(
+    type: MockOracleAccountType
+  ): Promise<[Keypair, TransactionInstruction]> {
+    const newAccount = Keypair.generate();
+    const space = this._space(type);
+    const neededBalance =
+      await this.provider.connection.getMinimumBalanceForRentExemption(space);
+
+    const ix = SystemProgram.createAccount({
+      fromPubkey: this.provider.wallet.publicKey,
+      newAccountPubkey: newAccount.publicKey,
+      programId: this.program.programId,
+      lamports: neededBalance,
+      space,
     });
+
+    return [newAccount, ix];
   }
 }
