@@ -1,6 +1,6 @@
 {
     "name": "@spool-hq/mock-oracles",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "main": "dist/cjs/index.js",
     "module": "dist/esm/index.js",
     "description": "On-chain program to mock writing Pyth and Switchboard Accounts.",

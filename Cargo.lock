@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "mock-oracles"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anchor-lang 0.29.0",
  "bytemuck",
