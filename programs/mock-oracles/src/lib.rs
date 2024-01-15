@@ -8,7 +8,7 @@ use std::cell::RefMut;
 use std::mem::size_of;
 use switchboard_v2::{AggregatorAccountData, SwitchboardDecimal};
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("4chuDREDK5YVUrjE877CoZbEr1bzcdS674yDzSB9mYgM");
 
 const QUOTE_CURRENCY: [u8; 32] = *b"USD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 

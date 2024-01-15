@@ -5,6 +5,7 @@ import {
   TransactionInstruction,
   SystemProgram,
   Signer,
+  PublicKey,
 } from "@solana/web3.js";
 import BN from "bn.js";
 import {
@@ -45,6 +46,7 @@ export class MockOracles {
   withSigner(signer: Signer): MockOracles {
     return MockOracles.load({
       provider: this.provider.withSigner(signer),
+      programId: this.program.programId,
     });
   }
 
@@ -53,13 +55,15 @@ export class MockOracles {
    */
   static load({
     provider,
+    programId,
   }: {
     // Provider
     provider: Provider;
+    programId?: PublicKey;
   }): MockOracles {
     const program = newProgram<Program<MockOraclesIDL>>(
       MockOraclesJSON,
-      MOCK_ORACLES_ADDRESS,
+      programId ?? MOCK_ORACLES_ADDRESS,
       provider
     );
     return new MockOracles(new SolanaAugmentedProvider(provider), program);
