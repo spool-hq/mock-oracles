@@ -24,9 +24,16 @@ enum MockOracleAccountType {
   SWITCHBOARD,
 }
 
-export interface OracleData {
+export interface PythPriceParams {
   price?: BN;
-  slot?: BN;
+  conf?: BN;
+  expo?: number;
+  ema_price?: BN;
+  ema_conf?: BN;
+}
+
+export interface SwitchboardPriceParams {
+  price?: BN;
   expo?: number;
 }
 
@@ -129,10 +136,16 @@ export class MockOracles {
 
   async setPythPrice(
     keypair: Keypair,
-    { price = new BN(-1), slot = new BN(-1), expo = 0 }: OracleData
+    {
+      price = new BN(0),
+      conf = new BN(0),
+      expo = 0,
+      ema_price = new BN(0),
+      ema_conf = new BN(0),
+    }: PythPriceParams
   ): Promise<string> {
     const tx = await this.program.methods
-      .setPythPrice(price, expo, slot)
+      .setPythPrice(price, conf, expo, ema_price, ema_conf)
       .accounts({
         target: keypair.publicKey,
       })
@@ -144,10 +157,10 @@ export class MockOracles {
 
   async setSwitchboardPrice(
     keypair: Keypair,
-    { price = new BN(-1), slot = new BN(-1), expo = 0 }: OracleData
+    { price = new BN(-1), expo = 0 }: SwitchboardPriceParams
   ): Promise<string> {
     const tx = await this.program.methods
-      .setSwitchboardPrice(price, expo, slot)
+      .setSwitchboardPrice(price, expo)
       .accounts({
         target: keypair.publicKey,
       })
