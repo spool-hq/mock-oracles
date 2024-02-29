@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run localnet",
+      "type": "shell",
+      "command": "anchor localnet",
+      "group": "test",
+      "presentation": {
+        "group": "testGroup",
+        "reveal": "always",
+        "panel": "new",
+        "echo": false
+      }
+    },
+    {
+      "label": "Run tests (localnet)",
+      "type": "shell",
+      "command": "anchor test --skip-local-validator",
+      "group": "test",
+      "presentation": {
+        "group": "testGroup",
+        "reveal": "always",
+        "panel": "new",
+        "echo": false
+      }
+    },
+    {
+      "label": "Get program pubkey",
+      "type": "shell",
+      "command": "solana-keygen pubkey ./target/deploy/mock_oracles-keypair.json",
+      "group": "test"
+    }
+  ]
+}
