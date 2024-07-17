@@ -1,4 +1,4 @@
-import { Program } from "@coral-xyz/anchor";
+import { Program } from '@coral-xyz/anchor'
 import {
   Keypair,
   Transaction,
@@ -6,17 +6,17 @@ import {
   SystemProgram,
   Signer,
   PublicKey,
-} from "@solana/web3.js";
-import BN from "bn.js";
+} from '@solana/web3.js'
+import BN from 'bn.js'
 import {
   AugmentedProvider,
   Provider,
   SolanaAugmentedProvider,
-} from "@saberhq/solana-contrib";
+} from '@saberhq/solana-contrib'
 
-import { MockOraclesIDL, MockOraclesJSON } from "./idls/mock_oracles";
-import { newProgram } from "@saberhq/anchor-contrib";
-import { MOCK_ORACLES_ADDRESS } from "./constants";
+import { MockOraclesIDL, MockOraclesJSON } from './idls/mock_oracles'
+import { newProgram } from '@saberhq/anchor-contrib'
+import { MOCK_ORACLES_ADDRESS } from './constants'
 
 enum MockOracleAccountType {
   PYTH_PRICE,
@@ -25,22 +25,22 @@ enum MockOracleAccountType {
 }
 
 export interface PythPriceParams {
-  price?: BN;
-  conf?: BN;
-  expo?: number;
-  ema_price?: BN;
-  ema_conf?: BN;
+  price?: BN
+  conf?: BN
+  expo?: number
+  ema_price?: BN
+  ema_conf?: BN
 }
 
 export interface SwitchboardPriceParams {
-  price?: BN;
-  expo?: number;
+  price?: BN
+  expo?: number
 }
 
 export class MockOracles {
-  public readonly PYTH_PRICE_ACCOUNT_SIZE = 3312;
-  public readonly PYTH_PRODUCT_ACCOUNT_SIZE = 512;
-  public readonly SWITCHBOARD_ACCOUNT_SIZE = 3851;
+  public readonly PYTH_PRICE_ACCOUNT_SIZE = 3312
+  public readonly PYTH_PRODUCT_ACCOUNT_SIZE = 512
+  public readonly SWITCHBOARD_ACCOUNT_SIZE = 3851
 
   constructor(
     readonly provider: AugmentedProvider,
@@ -54,7 +54,7 @@ export class MockOracles {
     return MockOracles.load({
       provider: this.provider.withSigner(signer),
       programId: this.program.programId,
-    });
+    })
   }
 
   /**
@@ -65,27 +65,27 @@ export class MockOracles {
     programId,
   }: {
     // Provider
-    provider: Provider;
-    programId?: PublicKey;
+    provider: Provider
+    programId?: PublicKey
   }): MockOracles {
     const program = newProgram<Program<MockOraclesIDL>>(
       MockOraclesJSON,
       programId ?? MOCK_ORACLES_ADDRESS,
       provider
-    );
-    return new MockOracles(new SolanaAugmentedProvider(provider), program);
+    )
+    return new MockOracles(new SolanaAugmentedProvider(provider), program)
   }
 
   async createPyth(): Promise<{
-    priceKeypair: Keypair;
-    productKeypair: Keypair;
+    priceKeypair: Keypair
+    productKeypair: Keypair
   }> {
     const [priceKeypair, createPriceIx] = await this._createAccount(
       MockOracleAccountType.PYTH_PRICE
-    );
+    )
     const [productKeypair, createProductIx] = await this._createAccount(
       MockOracleAccountType.PYTH_PRODUCT
-    );
+    )
     const initPythTx = await this.program.methods
       .initPyth()
       .accounts({
@@ -93,45 +93,53 @@ export class MockOracles {
         productAccount: productKeypair.publicKey,
       })
       .preInstructions([createPriceIx, createProductIx])
-      .transaction();
+      .transaction()
+
+    // need for bankrun
+    ;({ blockhash: initPythTx.recentBlockhash } =
+      await this.provider.connection.getLatestBlockhash())
 
     const pendingTx = await this.provider.send(
       initPythTx,
       [priceKeypair, productKeypair],
       {
-        commitment: "confirmed",
+        commitment: 'confirmed',
         skipPreflight: true,
       }
-    );
-    await pendingTx.wait();
+    )
+    await pendingTx.wait()
 
-    return { priceKeypair, productKeypair };
+    return { priceKeypair, productKeypair }
   }
 
   async createSwitchboard(): Promise<{
-    switchboardKeypair: Keypair;
+    switchboardKeypair: Keypair
   }> {
     const [switchboardKeypair, createSwitchboardIx] = await this._createAccount(
       MockOracleAccountType.SWITCHBOARD
-    );
+    )
     const initSwitchboardIx = await this.program.methods
       .initSwitchboard()
       .accounts({
         target: switchboardKeypair.publicKey,
       })
-      .instruction();
+      .instruction()
 
     const createTx = new Transaction().add(
       createSwitchboardIx,
       initSwitchboardIx
-    );
-    const pendingTx = await this.provider.send(createTx, [switchboardKeypair], {
-      commitment: "confirmed",
-      skipPreflight: true,
-    });
-    await pendingTx.wait();
+    )
+    // need for bankrun
+    ;({ blockhash: createTx.recentBlockhash } =
+      await this.provider.connection.getLatestBlockhash())
 
-    return { switchboardKeypair };
+    const pendingTx = await this.provider.send(createTx, [switchboardKeypair], {
+      commitment: 'confirmed',
+      skipPreflight: true,
+    })
+    await pendingTx.wait()
+
+    return { switchboardKeypair }
   }
 
   async setPythPrice(
@@ -150,9 +158,13 @@ export class MockOracles {
         target: keypair.publicKey,
       })
       .signers([keypair])
-      .transaction();
-    const pendingTx = await this.provider.send(tx);
-    return (await pendingTx.wait()).signature;
+      .transaction()
+    // need for bankrun
+    ;({ blockhash: tx.recentBlockhash } =
+      await this.provider.connection.getLatestBlockhash())
+
+    const pendingTx = await this.provider.send(tx)
+    return (await pendingTx.wait()).signature
   }
 
   async setSwitchboardPrice(
@@ -165,29 +177,33 @@ export class MockOracles {
         target: keypair.publicKey,
       })
       .signers([keypair])
-      .transaction();
-    const pendingTx = await this.provider.send(tx, [], { skipPreflight: true });
-    return (await pendingTx.wait()).signature;
+      .transaction()
+    // need for bankrun
+    ;({ blockhash: tx.recentBlockhash } =
+      await this.provider.connection.getLatestBlockhash())
+
+    const pendingTx = await this.provider.send(tx, [], { skipPreflight: true })
+    return (await pendingTx.wait()).signature
   }
 
   private _space(type: MockOracleAccountType): number {
     switch (type) {
       case MockOracleAccountType.PYTH_PRICE:
-        return this.PYTH_PRICE_ACCOUNT_SIZE;
+        return this.PYTH_PRICE_ACCOUNT_SIZE
       case MockOracleAccountType.PYTH_PRODUCT:
-        return this.PYTH_PRODUCT_ACCOUNT_SIZE;
+        return this.PYTH_PRODUCT_ACCOUNT_SIZE
       case MockOracleAccountType.SWITCHBOARD:
-        return this.SWITCHBOARD_ACCOUNT_SIZE;
+        return this.SWITCHBOARD_ACCOUNT_SIZE
     }
   }
 
   private async _createAccount(
     type: MockOracleAccountType
   ): Promise<[Keypair, TransactionInstruction]> {
-    const newAccount = Keypair.generate();
-    const space = this._space(type);
+    const newAccount = Keypair.generate()
+    const space = this._space(type)
     const neededBalance =
-      await this.provider.connection.getMinimumBalanceForRentExemption(space);
+      await this.provider.connection.getMinimumBalanceForRentExemption(space)
 
     const ix = SystemProgram.createAccount({
       fromPubkey: this.provider.wallet.publicKey,
@@ -195,8 +211,8 @@ export class MockOracles {
       programId: this.program.programId,
       lamports: neededBalance,
       space,
-    });
+    })
 
-    return [newAccount, ix];
+    return [newAccount, ix]
   }
 }
